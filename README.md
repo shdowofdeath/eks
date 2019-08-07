@@ -9,3 +9,8 @@ graph TD;
   DEPLOY_SCRIPT-->K8S_CLIENT;
   DEPLOY_SCRIPT-->HELM_CLIENT;
 ```
+
+#lunch . stack 
+```
+aws cloudformation deploy --template template.yaml --stack-name my-new-stack --parameter-overrides Key1=Value1 Key2=Value2
+```
