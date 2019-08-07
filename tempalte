@@ -1,0 +1,355 @@
+---
+AWSTemplateFormatVersion: '2010-09-09'
+Description: 'Amazon EKS Service Role'
+Parameters:
+  EnvironmentName:
+    Description: Environment Name
+    Type: String
+    Default: Dev
+  Version:
+    Type: String
+    Default: 13
+  SpotPrice:
+    Type: String
+    Default: 0.03
+    Description: default spot price for SpotInstanceType selected above
+  Release:
+    Type: String
+    Description: Release Identifier
+    Default: develop
+  EKSClusterName:
+    Description: Name of the cluster
+    Type: String
+    Default: eks-devops-cluster
+  KeyName:
+    Description: The EC2 Key Pair to allow SSH access to the instances
+    Type: AWS::EC2::KeyPair::KeyName
+    Default: elhays
+  NodeImageId:
+    Type: AWS::EC2::Image::Id
+    Description: E AMI id for the node instances.
+    Default: ami-0a54c984b9f908c81
+  NodeInstanceType:
+    Description: L EC2 instance type for the node instances
+    Type: String
+    Default: m4.xlarge
+    AllowedValues:
+      - t2.xlarge
+      - t2.2xlarge
+      - t3.xlarge
+      - t3.2xlarge
+      - m3.large
+      - m3.xlarge
+      - m3.2xlarge
+      - m4.large
+      - m4.xlarge
+    ConstraintDescription: Must be a valid EC2 instance type
+  NodeAutoScalingGroupMinSize:
+    Type: Number
+    Description: H Minimum size of Node Group ASG.
+    Default: 3
+  NodeAutoScalingGroupMaxSize:
+    Type: Number
+    Description: A Maximum size of Node Group ASG.
+    Default: 7
+  NodeVolumeSize:
+    Type: Number
+    Description: Y Node volume size
+    Default: 500
+  ClusterName:
+    Description: E The cluster name provided when the cluster was created. If it is incorrect, nodes will not be able to join the cluster.
+    Type: String
+    Default: eks-automation
+  BootstrapArguments:
+    Description: F Arguments to pass to the bootstrap script. See files/bootstrap.sh in https://github.com/awslabs/amazon-eks-ami
+    Default: ""
+    Type: String
+  NodeGroupName:
+    Description: R Unique identifier for the Node Group.
+    Type: String
+    Default: eks-automation
+  ClusterControlPlaneSecurityGroup:
+    Description: A The security group of the cluster control plane.
+    Type: AWS::EC2::SecurityGroup::Id
+    Default: sg-0effdc4c405811d86
+  VpcId:
+    Description: T The VPC of the worker instances
+    Type: AWS::EC2::VPC::Id
+    Default: vpc-ddb0b4a4
+  Subnets:
+    Description: !! The subnets where workers can be created.
+    Type: List<AWS::EC2::Subnet::Id>
+    Default: subnet-3769f24e,subnet-0cf1d57607dffc621
+  PublicIp:
+    Description: Associate the public IP addresses of the worker nodes
+    Type: String
+    Default: "false"
+
+
+Metadata:
+  AWS::CloudFormation::Interface:
+    ParameterGroups:
+      -
+        Label:
+          default: "EKS Cluster"
+        Parameters:
+          - ClusterName
+          - ClusterControlPlaneSecurityGroup
+      -
+        Label:
+          default: "Worker Node Configuration"
+        Parameters:
+          - NodeGroupName
+          - NodeAutoScalingGroupMinSize
+          - NodeAutoScalingGroupMaxSize
+          - NodeInstanceType
+          - NodeImageId
+          - NodeVolumeSize
+          - KeyName
+          - BootstrapArguments
+      -
+        Label:
+          default: "Worker Network Configuration"
+        Parameters:
+          - VpcId
+          - Subnets
+
+Resources:
+############ CRTL
+  AWSServiceRoleForAmazonEKS:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+        - Effect: Allow
+          Principal:
+            Service:
+            - eks.amazonaws.com
+          Action:
+          - sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/AmazonEKSServicePolicy
+        - arn:aws:iam::aws:policy/AmazonEKSClusterPolicy
+        - arn:aws:iam::aws:policy/AmazonSSMFullAccess
+  AWSAmazonEKS:
+    Type: AWS::EKS::Cluster
+    DependsOn: "AWSServiceRoleForAmazonEKS"
+    Properties:
+     Name: !Ref ClusterName
+     Version: '1.12'
+     RoleArn: !Sub ${AWSServiceRoleForAmazonEKS.Arn}
+     ResourcesVpcConfig:
+       SecurityGroupIds:
+       - !Ref ClusterControlPlaneSecurityGroup
+       SubnetIds:
+         - !Select
+            - '0'
+            - !Ref Subnets
+         - !Select
+            - '1'
+            - !Ref Subnets
+############ CRT
+
+
+############ Nodes
+
+  NodeInstanceProfile:
+    Type: AWS::IAM::InstanceProfile
+    DependsOn : "AWSAmazonEKS"
+    Properties:
+      Path: "/"
+      Roles:
+      - !Ref NodeInstanceRole
+
+
+  NodeInstanceRole:
+    DependsOn : "AWSAmazonEKS"
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+        - Effect: Allow
+          Principal:
+            Service:
+            - ec2.amazonaws.com
+          Action:
+          - sts:AssumeRole
+      Path: "/"
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/AmazonEKSWorkerNodePolicy
+        - arn:aws:iam::aws:policy/AmazonEKSServicePolicy
+        - arn:aws:iam::aws:policy/AmazonEKSClusterPolicy
+        - arn:aws:iam::aws:policy/AmazonEKS_CNI_Policy
+        - arn:aws:iam::aws:policy/AmazonEC2ContainerRegistryReadOnly
+        - arn:aws:iam::aws:policy/AmazonSSMFullAccess
+
+
+  NodeSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    DependsOn : "AWSAmazonEKS"
+    Properties:
+      GroupDescription: Security group for all nodes in the cluster
+      VpcId:
+        !Ref VpcId
+      Tags:
+      - Key: !Sub "kubernetes.io/cluster/${ClusterName}"
+        Value: 'owned'
+
+
+  NodeSecurityGroupIngress:
+    Type: AWS::EC2::SecurityGroupIngress
+    DependsOn: NodeSecurityGroup
+    Properties:
+      Description: Allow node to communicate with each other
+      GroupId: !Ref NodeSecurityGroup
+      SourceSecurityGroupId: !Ref NodeSecurityGroup
+      IpProtocol: '-1'
+      FromPort: 0
+      ToPort: 65535
+
+
+  NodeSecurityGroupFromControlPlaneIngress:
+    Type: AWS::EC2::SecurityGroupIngress
+    DependsOn: NodeSecurityGroup
+    Properties:
+      Description: Allow worker Kubelets and pods to receive communication from the cluster control plane
+      GroupId: !Ref NodeSecurityGroup
+      SourceSecurityGroupId: !Ref ClusterControlPlaneSecurityGroup
+      IpProtocol: tcp
+      FromPort: 1025
+      ToPort: 65535
+
+  ControlPlaneEgressToNodeSecurityGroup:
+    Type: AWS::EC2::SecurityGroupEgress
+    DependsOn: NodeSecurityGroup
+    Properties:
+      Description: Allow the cluster control plane to communicate with worker Kubelet and pods
+      GroupId: !Ref ClusterControlPlaneSecurityGroup
+      DestinationSecurityGroupId: !Ref NodeSecurityGroup
+      IpProtocol: tcp
+      FromPort: 1025
+      ToPort: 65535
+
+  NodeSecurityGroupFromControlPlaneOn443Ingress:
+    Type: AWS::EC2::SecurityGroupIngress
+    DependsOn: NodeSecurityGroup
+    Properties:
+      Description: Allow pods running extension API servers on port 443 to receive communication from cluster control plane
+      GroupId: !Ref NodeSecurityGroup
+      SourceSecurityGroupId: !Ref ClusterControlPlaneSecurityGroup
+      IpProtocol: tcp
+      FromPort: 443
+      ToPort: 443
+
+  ControlPlaneEgressToNodeSecurityGroupOn443:
+    Type: AWS::EC2::SecurityGroupEgress
+    DependsOn: NodeSecurityGroup
+    Properties:
+      Description: Allow the cluster control plane to communicate with pods running extension API servers on port 443
+      GroupId: !Ref ClusterControlPlaneSecurityGroup
+      DestinationSecurityGroupId: !Ref NodeSecurityGroup
+      IpProtocol: tcp
+      FromPort: 443
+      ToPort: 443
+
+  ClusterControlPlaneSecurityGroupIngress:
+    Type: AWS::EC2::SecurityGroupIngress
+    DependsOn: NodeSecurityGroup
+    Properties:
+      Description: Allow pods to communicate with the cluster API Server
+      GroupId: !Ref ClusterControlPlaneSecurityGroup
+      SourceSecurityGroupId: !Ref NodeSecurityGroup
+      IpProtocol: tcp
+      ToPort: 443
+      FromPort: 443
+
+  NodeGroup:
+    Type: AWS::AutoScaling::AutoScalingGroup
+    DependsOn : "AWSAmazonEKS"
+    Properties:
+      DesiredCapacity: !Ref NodeAutoScalingGroupMinSize
+      LaunchConfigurationName: !Ref NodeLaunchConfig
+      MinSize: !Ref NodeAutoScalingGroupMinSize
+      MaxSize: !Ref NodeAutoScalingGroupMaxSize
+      TargetGroupARNs:
+        - !Ref 31090Tar
+        - !Ref 31091Tar
+        - !Ref 31092Tar
+      VPCZoneIdentifier:
+        !Ref Subnets
+      Tags:
+      - Key: Name
+        Value: !Sub "${ClusterName}-${NodeGroupName}-Node"
+        PropagateAtLaunch: 'true'
+      - Key: !Sub 'kubernetes.io/cluster/${ClusterName}'
+        Value: 'owned'
+        PropagateAtLaunch: 'true'
+    CreationPolicy:
+      ResourceSignal:
+        Timeout: PT15M
+    UpdatePolicy:
+      AutoScalingRollingUpdate:
+        MinInstancesInService: '0'
+        MaxBatchSize: '1'
+        PauseTime: PT15M
+        WaitOnResourceSignals: 'true'
+
+
+  NodeLaunchConfig:
+    Type: AWS::AutoScaling::LaunchConfiguration
+    DependsOn : "AWSAmazonEKS"
+    Properties:
+      AssociatePublicIpAddress: !Ref PublicIp
+      IamInstanceProfile: !Ref NodeInstanceProfile
+      ImageId: !Ref NodeImageId
+      InstanceType: !Ref NodeInstanceType
+      SpotPrice: !Ref SpotPrice
+      KeyName: !Ref KeyName
+      SecurityGroups:
+      - !Ref NodeSecurityGroup
+      BlockDeviceMappings:
+        - DeviceName: /dev/xvda
+          Ebs:
+            VolumeSize: !Ref NodeVolumeSize
+            VolumeType: gp2
+            DeleteOnTermination: true
+      UserData:
+        Fn::Base64:
+          !Sub |
+            #!/bin/bash
+            set -o xtrace
+            /etc/eks/bootstrap.sh ${ClusterName} ${BootstrapArguments}
+            /opt/aws/bin/cfn-signal --exit-code $? \
+                     --stack  ${AWS::StackName} \
+                     --resource NodeGroup  \
+                     --region ${AWS::Region}
+############ Nodes
+
+Outputs:
+  NodeInstanceRole:
+    Description: The node instance role arn
+    Value: !GetAtt NodeInstanceRole.Arn
+    Export:
+      Name: !Sub "${AWS::StackName}-NodeInstanceRoleArn"
+  ClusterName:
+    Description: The cluster name
+    Value: !Ref ClusterName
+    Export:
+      Name: !Sub "${AWS::StackName}-ClusterName"
+  PublicNLB:
+    Description: The public network load balancer fqdns
+    Value: !GetAtt publicNLB.DNSName
+    Export:
+      Name: !Sub "${AWS::StackName}-PublicNlbDns"
+  NodesSecurityGroupId:
+    Description: EKS Nodes security group id
+    Value: !GetAtt NodeSecurityGroup.GroupId
+    Export:
+      Name: !Sub "${AWS::StackName}-NodesSecurityGroupId"
+  AutoScalingGroupName:
+    Description: EKS Nodes auto scaling group name
+    Value: !Ref NodeGroup
+    Export:
+      Name: !Sub "${AWS::StackName}-AutoScalingGroupName"
