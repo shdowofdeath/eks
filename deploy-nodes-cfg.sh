@@ -6,7 +6,7 @@ run_test="true"
 help_user(){
       printf "\nThis script upgrades helm chart according to given values\n"
       echo "Must values: "
-      echo "--cluster-name                  The  eks cluster name "
+      echo "--cluster-name                  The  eks cluster name elhay "
       echo "--role-arn            The eks node instance role arn"
       echo "Options"
       echo "--lb-fqdns          The public network load balancer fqdns"
@@ -69,7 +69,7 @@ done
 
 
 function eks_login(){
-    echo "loging to eks cluster named ${CLUSTER_NAME} to deploy configure ndoe script "
+    echo "loging to eks cluster named ${CLUSTER_NAME} to deploy configure ndoe script elhay "
     sudo aws eks --region us-west-2 update-kubeconfig --name ${CLUSTER_NAME} --no-verify-ssl
 }
 
@@ -119,7 +119,7 @@ nodes_status=`sudo kubectl get nodes | awk '{print $2}' | grep -v STATUS | wc -l
 x=1
 while [ ${nodes_status} -le  2 ] || [ $x -ge 500 ] ; do
         x=$(( $x + 1 ))
-	    msg "waiting for nodes to be up :) ${nodes_status} "
+	    msg "waiting for nodes to be up elhay :) ${nodes_status} "
         nodes_status=`sudo kubectl get nodes | awk '{print $2}' | grep -v STATUS | wc -l`
         for dns in `kubectl get pods -n kube-system | grep dns | grep -v Running | awk '{print $1}'` ; do kubectl delete pods --grace-period=0 --force -n kube-system $dns ; done
         sleep 30
@@ -146,7 +146,7 @@ helm_status=`sudo kubectl get pods -n kube-system | grep tiller | awk '{print $3
 x=1
 while [ ${helm_status} !=  "Running" ] || [ $x -ge 500 ] ; do
         x=$(( $x + 1 ))
-	    msg "waiting for helm to be up :) ${helm_status} "
+	    msg "waiting for helm to be up  elhay :) ${helm_status} "
         helm_status=`sudo kubectl get pods -n kube-system | grep tiller | awk '{print $3}'`
         sleep 10
 done
